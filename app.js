@@ -10,7 +10,7 @@ let appData = {
 let pendingDrop = null;
 
 // Days of the week
-const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Arranged'];
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', () => {
@@ -65,13 +65,14 @@ function initializeEventListeners() {
         const classroomId = modal.dataset.classroomId;
         const day = modal.dataset.day;
         const timeslot = modal.dataset.timeslot;
+        const courseIndex = modal.dataset.courseIndex;
         const name = document.getElementById('editCourseName').value.trim();
         const credits = document.getElementById('editCourseCredits').value;
         const instructorId = document.getElementById('editCourseInstructor').value;
         const modality = document.getElementById('editModality').value;
         
         if (name && credits) {
-            saveCourseChanges(courseId, name, credits, instructorId || null, classroomId, day, timeslot, modality);
+            saveCourseChanges(courseId, name, credits, instructorId || null, classroomId, day, timeslot, modality, courseIndex);
         }
     });
 }
@@ -116,7 +117,13 @@ function isCourseScheduled(courseId) {
     for (const classroomId in appData.schedule) {
         for (const day in appData.schedule[classroomId]) {
             for (const time in appData.schedule[classroomId][day]) {
-                if (appData.schedule[classroomId][day][time].courseId === courseId) {
+                const slotData = appData.schedule[classroomId][day][time];
+                if (Array.isArray(slotData)) {
+                    if (slotData.some(item => item.courseId === courseId)) {
+                        return true;
+                    }
+                } else if (slotData && slotData.courseId === courseId) {
+                    // Backward compatibility
                     return true;
                 }
             }
@@ -128,9 +135,14 @@ function isCourseScheduled(courseId) {
 function hasInPersonConflict(day, timeslot) {
     let inPersonCount = 0;
     for (const classroomId in appData.schedule) {
-        const scheduleData = appData.schedule[classroomId]?.[day]?.[timeslot];
-        if (scheduleData && scheduleData.modality === 'in-person') {
-            inPersonCount++;
+        const slotData = appData.schedule[classroomId]?.[day]?.[timeslot];
+        if (slotData) {
+            if (Array.isArray(slotData)) {
+                inPersonCount += slotData.filter(item => item.modality === 'in-person').length;
+            } else if (slotData.modality === 'in-person') {
+                // Backward compatibility
+                inPersonCount++;
+            }
             if (inPersonCount >= 2) {
                 return true;
             }
@@ -171,7 +183,13 @@ function deleteCourse(id) {
         DAYS.forEach(day => {
             if (appData.schedule[classroomId][day]) {
                 Object.keys(appData.schedule[classroomId][day]).forEach(time => {
-                    if (appData.schedule[classroomId][day][time].courseId === id) {
+                    const slotData = appData.schedule[classroomId][day][time];
+                    if (Array.isArray(slotData)) {
+                        appData.schedule[classroomId][day][time] = slotData.filter(item => item.courseId !== id);
+                        if (appData.schedule[classroomId][day][time].length === 0) {
+                            delete appData.schedule[classroomId][day][time];
+                        }
+                    } else if (slotData && slotData.courseId === id) {
                         delete appData.schedule[classroomId][day][time];
                     }
                 });
@@ -262,7 +280,7 @@ function addTimeslot(classroomId, day, startTime, endTime) {
 function removeTimeslot(classroomId, day, timeslot) {
     const classroom = appData.classrooms.find(c => c.id === classroomId);
     if (classroom) {
-        // Remove scheduled course for this timeslot on this day
+        // Remove scheduled courses for this timeslot on this day
         if (appData.schedule[classroomId][day] && appData.schedule[classroomId][day][timeslot]) {
             delete appData.schedule[classroomId][day][timeslot];
         }
@@ -297,18 +315,32 @@ function scheduleCourse(classroomId, day, time, courseId, modality) {
     if (!appData.schedule[classroomId][day]) {
         appData.schedule[classroomId][day] = {};
     }
+    if (!appData.schedule[classroomId][day][time]) {
+        appData.schedule[classroomId][day][time] = [];
+    }
     
-    appData.schedule[classroomId][day][time] = {
+    // Add course to the array
+    appData.schedule[classroomId][day][time].push({
         courseId: courseId,
         modality: modality || 'in-person'
-    };
+    });
     saveToLocalStorage();
     render();
 }
 
-function unscheduleCourse(classroomId, day, time) {
-    if (appData.schedule[classroomId] && appData.schedule[classroomId][day]) {
-        delete appData.schedule[classroomId][day][time];
+function unscheduleCourse(classroomId, day, time, courseIndex) {
+    if (appData.schedule[classroomId] && appData.schedule[classroomId][day] && appData.schedule[classroomId][day][time]) {
+        if (courseIndex !== undefined) {
+            // Remove specific course from array
+            appData.schedule[classroomId][day][time].splice(courseIndex, 1);
+            // Clean up empty array
+            if (appData.schedule[classroomId][day][time].length === 0) {
+                delete appData.schedule[classroomId][day][time];
+            }
+        } else {
+            // Remove entire slot (backward compatibility)
+            delete appData.schedule[classroomId][day][time];
+        }
         saveToLocalStorage();
         render();
     }
@@ -365,7 +397,7 @@ function closeModalityModal() {
     pendingDrop = null;
 }
 
-function showCourseModal(courseId, classroomId, day, timeslot) {
+function showCourseModal(courseId, classroomId, day, timeslot, courseIndex) {
     const course = appData.courses.find(c => c.id === courseId);
     if (!course) return;
     
@@ -374,8 +406,13 @@ function showCourseModal(courseId, classroomId, day, timeslot) {
     document.getElementById('editCourseInstructor').value = course.instructorId;
     
     // Get current modality for this scheduled slot
-    const scheduleData = appData.schedule[classroomId]?.[day]?.[timeslot];
-    const currentModality = scheduleData?.modality || 'in-person';
+    const slotData = appData.schedule[classroomId]?.[day]?.[timeslot];
+    let currentModality = 'in-person';
+    if (Array.isArray(slotData) && courseIndex !== undefined) {
+        currentModality = slotData[courseIndex]?.modality || 'in-person';
+    } else if (slotData && !Array.isArray(slotData)) {
+        currentModality = slotData.modality || 'in-person';
+    }
     document.getElementById('editModality').value = currentModality;
     
     // Update instructor dropdown
@@ -390,13 +427,14 @@ function showCourseModal(courseId, classroomId, day, timeslot) {
     modal.dataset.classroomId = classroomId;
     modal.dataset.day = day;
     modal.dataset.timeslot = timeslot;
+    modal.dataset.courseIndex = courseIndex !== undefined ? courseIndex : '';
 }
 
 function closeModal() {
     document.getElementById('courseModal').style.display = 'none';
 }
 
-function saveCourseChanges(courseId, name, credits, instructorId, classroomId, day, timeslot, modality) {
+function saveCourseChanges(courseId, name, credits, instructorId, classroomId, day, timeslot, modality, courseIndex) {
     const course = appData.courses.find(c => c.id === courseId);
     if (course) {
         course.name = name;
@@ -405,8 +443,12 @@ function saveCourseChanges(courseId, name, credits, instructorId, classroomId, d
         
         // Update modality for this specific scheduled slot
         if (classroomId && day && timeslot) {
-            if (appData.schedule[classroomId]?.[day]?.[timeslot]) {
-                appData.schedule[classroomId][day][timeslot].modality = modality;
+            const slotData = appData.schedule[classroomId]?.[day]?.[timeslot];
+            if (Array.isArray(slotData) && courseIndex !== undefined && courseIndex !== '') {
+                slotData[parseInt(courseIndex)].modality = modality;
+            } else if (slotData && !Array.isArray(slotData)) {
+                // Backward compatibility
+                slotData.modality = modality;
             }
         }
         
@@ -491,9 +533,9 @@ function renderSchedule() {
             dayTimeslots[day] = classroom.timeslots[day] || [];
         });
         
-        // Get all unique timeslots across all days for grid
+        // Get all unique timeslots across all weekdays (excluding Arranged)
         const allTimeslots = new Set();
-        DAYS.forEach(day => {
+        DAYS.filter(day => day !== 'Arranged').forEach(day => {
             (classroom.timeslots[day] || []).forEach(ts => allTimeslots.add(ts));
         });
         const sortedTimeslots = Array.from(allTimeslots).sort();
@@ -503,22 +545,57 @@ function renderSchedule() {
                 <div class="day-header"></div>
                 ${DAYS.map(day => `<div class="day-header">${day}</div>`).join('')}
                 
-                ${sortedTimeslots.map(timeslot => `
+                ${sortedTimeslots.map((timeslot, rowIndex) => `
                     <div class="time-label">${timeslot}</div>
                     ${DAYS.map(day => {
+                        // Special handling for Arranged column - only show on first row and span all rows
+                        if (day === 'Arranged') {
+                            if (rowIndex === 0) {
+                                const slotData = appData.schedule[classroom.id]?.[day]?.['arranged'];
+                                const courses = Array.isArray(slotData) ? slotData : (slotData ? [slotData] : []);
+                                
+                                const modalityIcon = {
+                                    'in-person': '🏫',
+                                    'online': '💻',
+                                    'hybrid': '🔄'
+                                };
+                                
+                                return `
+                                    <div class="time-slot arranged-slot ${courses.length > 0 ? 'occupied' : ''}" style="grid-row: span ${sortedTimeslots.length};" 
+                                         ondragover="handleDragOver(event)"
+                                         ondragleave="handleDragLeave(event)"
+                                         ondrop="handleDrop(event, '${classroom.id}', '${day}', 'arranged')">
+                                        ${courses.map((item, index) => {
+                                            const course = appData.courses.find(c => c.id === item.courseId);
+                                            const instructor = course ? appData.instructors.find(i => i.id === course.instructorId) : null;
+                                            return `
+                                                <div class="scheduled-course" ondblclick="showCourseModal('${item.courseId}', '${classroom.id}', '${day}', 'arranged', ${index})">
+                                                    <button class="remove-course" onclick="event.stopPropagation(); unscheduleCourse('${classroom.id}', '${day}', 'arranged', ${index})">&times;</button>
+                                                    <div class="course-name">${course ? course.name : 'Unknown'}</div>
+                                                    <div class="course-meta">
+                                                        ${course ? course.credits + ' credits' : ''}${instructor ? ' • ' + instructor.name : ''}
+                                                        <span class="modality-badge">${modalityIcon[item.modality]} ${item.modality}</span>
+                                                    </div>
+                                                </div>
+                                            `;
+                                        }).join('')}
+                                    </div>
+                                `;
+                            } else {
+                                return ''; // Skip for other rows since it spans
+                            }
+                        }
+                        
                         const hasTimeslot = (classroom.timeslots[day] || []).includes(timeslot);
                         if (!hasTimeslot) {
                             return `<div class="time-slot" style="background: #f0f0f0;"></div>`;
                         }
                         
-                        const scheduleData = appData.schedule[classroom.id]?.[day]?.[timeslot];
-                        const courseId = scheduleData?.courseId;
-                        const modality = scheduleData?.modality || 'in-person';
-                        const course = courseId ? appData.courses.find(c => c.id === courseId) : null;
-                        const instructor = course ? appData.instructors.find(i => i.id === course.instructorId) : null;
+                        const slotData = appData.schedule[classroom.id]?.[day]?.[timeslot];
+                        const courses = Array.isArray(slotData) ? slotData : (slotData ? [slotData] : []);
                         
                         // Check for in-person conflicts
-                        const hasConflict = scheduleData && modality === 'in-person' && hasInPersonConflict(day, timeslot);
+                        const hasConflict = hasInPersonConflict(day, timeslot);
                         
                         const modalityIcon = {
                             'in-person': '🏫',
@@ -526,17 +603,23 @@ function renderSchedule() {
                             'hybrid': '🔄'
                         };
                         
-                        if (course) {
+                        if (courses.length > 0) {
                             return `
                                 <div class="time-slot occupied ${hasConflict ? 'conflict' : ''}">
-                                    <div class="scheduled-course" ondblclick="showCourseModal('${course.id}', '${classroom.id}', '${day}', '${timeslot}')">
-                                        <button class="remove-course" onclick="event.stopPropagation(); unscheduleCourse('${classroom.id}', '${day}', '${timeslot}')">&times;</button>
-                                        <div class="course-name">${course.name}${hasConflict ? ' ⚠️' : ''}</div>
-                                        <div class="course-meta">
-                                            ${course.credits} credits${instructor ? ' • ' + instructor.name : ''}
-                                            <span class="modality-badge">${modalityIcon[modality]} ${modality}</span>
-                                        </div>
-                                    </div>
+                                    ${courses.map((item, index) => {
+                                        const course = appData.courses.find(c => c.id === item.courseId);
+                                        const instructor = course ? appData.instructors.find(i => i.id === course.instructorId) : null;
+                                        return `
+                                            <div class="scheduled-course" ondblclick="showCourseModal('${item.courseId}', '${classroom.id}', '${day}', '${timeslot}', ${index})">
+                                                <button class="remove-course" onclick="event.stopPropagation(); unscheduleCourse('${classroom.id}', '${day}', '${timeslot}', ${index})">&times;</button>
+                                                <div class="course-name">${course ? course.name : 'Unknown'}${hasConflict ? ' ⚠️' : ''}</div>
+                                                <div class="course-meta">
+                                                    ${course ? course.credits + ' credits' : ''}${instructor ? ' • ' + instructor.name : ''}
+                                                    <span class="modality-badge">${modalityIcon[item.modality]} ${item.modality}</span>
+                                                </div>
+                                            </div>
+                                        `;
+                                    }).join('')}
                                 </div>
                             `;
                         } else {
@@ -555,7 +638,7 @@ function renderSchedule() {
                 <span>${classroom.timeslotFormExpanded !== false ? '▼' : '▶'} Manage Time Slots</span>
             </div>
             <div class="timeslot-form" style="display: ${classroom.timeslotFormExpanded !== false ? 'block' : 'none'};">
-                ${DAYS.map(day => `
+                ${DAYS.filter(day => day !== 'Arranged').map(day => `
                     <div class="timeslot-day-section">
                         <h5>${day}</h5>
                         <div class="timeslot-inputs">
@@ -579,12 +662,51 @@ function renderSchedule() {
                     </div>
                 `).join('')}
             </div>
-        ` : `
-            <div class="timeslot-form-header" onclick="toggleTimeslotForm('${classroom.id}')">
+        ` : `            <div class="classroom-schedule ${!classroom.visible ? 'hidden' : ''}">
+                <div class="day-header"></div>
+                ${DAYS.map(day => `<div class="day-header">${day}</div>`).join('')}
+                <div class="time-label">No times</div>
+                ${DAYS.map(day => {
+                    if (day === 'Arranged') {
+                        const slotData = appData.schedule[classroom.id]?.[day]?.['arranged'];
+                        const courses = Array.isArray(slotData) ? slotData : (slotData ? [slotData] : []);
+                        
+                        const modalityIcon = {
+                            'in-person': '🏫',
+                            'online': '💻',
+                            'hybrid': '🔄'
+                        };
+                        
+                        return `
+                            <div class="time-slot arranged-slot ${courses.length > 0 ? 'occupied' : ''}"
+                                 ondragover="handleDragOver(event)"
+                                 ondragleave="handleDragLeave(event)"
+                                 ondrop="handleDrop(event, '${classroom.id}', '${day}', 'arranged')">
+                                ${courses.map((item, index) => {
+                                    const course = appData.courses.find(c => c.id === item.courseId);
+                                    const instructor = course ? appData.instructors.find(i => i.id === course.instructorId) : null;
+                                    return `
+                                        <div class="scheduled-course" ondblclick="showCourseModal('${item.courseId}', '${classroom.id}', '${day}', 'arranged', ${index})">
+                                            <button class="remove-course" onclick="event.stopPropagation(); unscheduleCourse('${classroom.id}', '${day}', 'arranged', ${index})">&times;</button>
+                                            <div class="course-name">${course ? course.name : 'Unknown'}</div>
+                                            <div class="course-meta">
+                                                ${course ? course.credits + ' credits' : ''}${instructor ? ' • ' + instructor.name : ''}
+                                                <span class="modality-badge">${modalityIcon[item.modality]} ${item.modality}</span>
+                                            </div>
+                                        </div>
+                                    `;
+                                }).join('')}
+                            </div>
+                        `;
+                    } else {
+                        return `<div class="time-slot" style="background: #f0f0f0;"></div>`;
+                    }
+                }).join('')}
+            </div>            <div class="timeslot-form-header" onclick="toggleTimeslotForm('${classroom.id}')">
                 <span>${classroom.timeslotFormExpanded !== false ? '▼' : '▶'} Manage Time Slots</span>
             </div>
             <div class="timeslot-form" style="display: ${classroom.timeslotFormExpanded !== false ? 'block' : 'none'};">
-                ${DAYS.map(day => `
+                ${DAYS.filter(day => day !== 'Arranged').map(day => `
                     <div class="timeslot-day-section">
                         <h5>${day}</h5>
                         <div class="timeslot-inputs">
@@ -677,18 +799,22 @@ function loadFromLocalStorage() {
                     });
                 }
                 
-                // Migrate schedule from old format (courseId) to new format ({ courseId, modality })
+                // Migrate schedule from old format to new array format
                 DAYS.forEach(day => {
                     if (appData.schedule[classroom.id][day]) {
                         Object.keys(appData.schedule[classroom.id][day]).forEach(time => {
                             const value = appData.schedule[classroom.id][day][time];
                             if (typeof value === 'string') {
-                                // Old format: just courseId
-                                appData.schedule[classroom.id][day][time] = {
+                                // Very old format: just courseId string
+                                appData.schedule[classroom.id][day][time] = [{
                                     courseId: value,
                                     modality: 'in-person'
-                                };
+                                }];
+                            } else if (value && !Array.isArray(value) && value.courseId) {
+                                // Old format: single object { courseId, modality }
+                                appData.schedule[classroom.id][day][time] = [value];
                             }
+                            // New format is already an array, no change needed
                         });
                     }
                 });
