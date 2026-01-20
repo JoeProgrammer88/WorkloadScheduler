@@ -123,8 +123,18 @@ input:focus, select:focus {
     transition: all 0.2s;
 }
 
+.course-item.course-scheduled {
+    background: #d4edda;
+    border-color: #c3e6cb;
+}
+
+.course-item.course-unscheduled {
+    background: #f8d7da;
+    border-color: #f5c6cb;
+}
+
 .course-item:hover {
-    background: #e8f4f8;
+    background: #e8f4f8 !important;
     border-color: #3498db;
 }
 
@@ -264,6 +274,14 @@ input:focus, select:focus {
 
 .time-slot.occupied {
     background: #f8f9fa;
+}
+
+.time-slot.conflict {
+    background: #ffcccc;
+}
+
+.time-slot.conflict .scheduled-course {
+    background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
 }
 
 .scheduled-course {

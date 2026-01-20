@@ -112,6 +112,33 @@ function getInstructorWorkload(instructorId) {
         .reduce((sum, c) => sum + c.credits, 0);
 }
 
+function isCourseScheduled(courseId) {
+    for (const classroomId in appData.schedule) {
+        for (const day in appData.schedule[classroomId]) {
+            for (const time in appData.schedule[classroomId][day]) {
+                if (appData.schedule[classroomId][day][time].courseId === courseId) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+function hasInPersonConflict(day, timeslot) {
+    let inPersonCount = 0;
+    for (const classroomId in appData.schedule) {
+        const scheduleData = appData.schedule[classroomId]?.[day]?.[timeslot];
+        if (scheduleData && scheduleData.modality === 'in-person') {
+            inPersonCount++;
+            if (inPersonCount >= 2) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 // Course functions
 function addCourse() {
     const nameInput = document.getElementById('courseName');
@@ -433,8 +460,10 @@ function renderCourses() {
     
     container.innerHTML = appData.courses.map(course => {
         const instructor = appData.instructors.find(i => i.id === course.instructorId);
+        const isScheduled = isCourseScheduled(course.id);
+        const statusClass = isScheduled ? 'course-scheduled' : 'course-unscheduled';
         return `
-            <div class="course-item" draggable="true" 
+            <div class="course-item ${statusClass}" draggable="true" 
                  ondragstart="handleDragStart(event, '${course.id}')"
                  ondragend="handleDragEnd(event)">
                 <div class="course-info">
@@ -488,6 +517,9 @@ function renderSchedule() {
                         const course = courseId ? appData.courses.find(c => c.id === courseId) : null;
                         const instructor = course ? appData.instructors.find(i => i.id === course.instructorId) : null;
                         
+                        // Check for in-person conflicts
+                        const hasConflict = scheduleData && modality === 'in-person' && hasInPersonConflict(day, timeslot);
+                        
                         const modalityIcon = {
                             'in-person': '🏫',
                             'online': '💻',
@@ -496,10 +528,10 @@ function renderSchedule() {
                         
                         if (course) {
                             return `
-                                <div class="time-slot occupied">
+                                <div class="time-slot occupied ${hasConflict ? 'conflict' : ''}">
                                     <div class="scheduled-course" ondblclick="showCourseModal('${course.id}', '${classroom.id}', '${day}', '${timeslot}')">
-                                        <button class="remove-course" onclick="event.stopPropagation(); unscheduleCourse('${classroom.id}', '${day}', '${timeslot}')">×</button>
-                                        <div class="course-name">${course.name}</div>
+                                        <button class="remove-course" onclick="event.stopPropagation(); unscheduleCourse('${classroom.id}', '${day}', '${timeslot}')">&times;</button>
+                                        <div class="course-name">${course.name}${hasConflict ? ' ⚠️' : ''}</div>
                                         <div class="course-meta">
                                             ${course.credits} credits${instructor ? ' • ' + instructor.name : ''}
                                             <span class="modality-badge">${modalityIcon[modality]} ${modality}</span>
